@@ -1,0 +1,113 @@
+name: Build Oni Anizium plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Oni/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Read plugin version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/^version = \([0-9][0-9]*\).*/\1/p' Oni/build.gradle.kts | head -1)
+          if [ -z "$VERSION" ]; then
+            echo 'Could not determine plugin version.'
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Remove stale published binary
+        run: rm -f Anizium.cs3
+
+      - name: Build plugin
+        run: gradle :Oni:make --stacktrace
+
+      - name: Prepare fresh build output
+        shell: bash
+        env:
+          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          FILE=$(find Oni -type f -name '*.cs3' -print | head -1)
+          if [ -z "$FILE" ]; then
+            echo 'No fresh .cs3 file produced under Oni.'
+            exit 1
+          fi
+          cp "$FILE" ./Anizium.cs3
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          p = pathlib.Path('Anizium.cs3')
+          h = hashlib.sha256(p.read_bytes()).hexdigest()
+          item = {
+              'url': 'https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/Anizium.cs3',
+              'status': 1,
+              'version': int(os.environ['PLUGIN_VERSION']),
+              'name': 'Anizium',
+              'internalName': 'Anizium',
+              'authors': ['kerimmkirac', 'ByAyzen', 'anisector'],
+              'description': 'Anizium current official app API routes CloudStream provider.',
+              'fileSize': p.stat().st_size,
+              'repositoryUrl': 'https://github.com/anisector/Oni',
+              'language': 'tr',
+              'tvTypes': ['AnimeMovie', 'Anime'],
+              'iconUrl': 'https://anizium.co/assets/images/logo.png',
+              'apiVersion': 1,
+              'fileHash': 'sha256-' + h,
+          }
+          pathlib.Path('plugins.json').write_text(json.dumps([item], ensure_ascii=False, indent=2) + '\n')
+          PY
+          cat > repo.json <<'JSON'
+          {
+            "iconUrl": "https://anizium.co/assets/images/logo.png",
+            "name": "Oni",
+            "description": "Anizium CloudStream provider",
+            "manifestVersion": 1,
+            "pluginLists": [
+              "https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/plugins.json"
+            ]
+          }
+          JSON
+
+      - name: Publish fresh plugin files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Anizium.cs3 plugins.json repo.json
+          if git diff --cached --quiet; then
+            echo 'No published changes.'
+            exit 0
+          fi
+          git commit -m 'Publish updated Anizium build [skip ci]'
+          git push origin HEAD:main
