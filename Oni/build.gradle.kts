@@ -1,7 +1,7 @@
-// v35: aggregate all available video qualities, audio groups and subtitle tracks.
-version = 35
+// v36: current app schema hardening, dynamic genres, pagination and API host caching.
+version = 36
 cloudstream {
-    description = "Anizium provider - multi-quality, multi-audio and multi-subtitle source aggregation"
+    description = "Anizium provider - dynamic genres, resilient pagination, multi-source playback and cached official API routing"
     authors = listOf("kerimmkirac", "ByAyzen", "anisector")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")
