@@ -1,0 +1,8 @@
+{
+  "name": "Oni",
+  "description": "Anizium CloudStream provider",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/plugins.json"
+  ]
+}
