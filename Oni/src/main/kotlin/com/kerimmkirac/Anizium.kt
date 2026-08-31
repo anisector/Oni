@@ -67,12 +67,12 @@ class Anizium : MainAPI() {
         val root = AniziumApi.unwrap(node)
         val title = AniziumApi.text(
             root,
-            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+            "name", "title", "animeName", "anime_name", "original_name", "originalName", "name_jp", "nameJp",
         ) ?: return null
         val poster = AniziumApi.text(
             root,
             "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
-            "mobile_poster_link", "mobilePosterLink",
+            "mobile_poster_link", "mobilePosterLink", "anime_poster", "animePoster",
         )
         val plot = AniziumApi.text(
             root,
@@ -163,10 +163,14 @@ class Anizium : MainAPI() {
         for (id in ids) {
             val encodedId = AniziumApi.encode(id)
             val paths = listOf(
+                // TV client routes.
                 "/anime/source?id=$encodedId&season=${ref.season}&episode=${ref.episode}",
                 "/anime/source?id=$encodedId&site=main&season=${ref.season}&episode=${ref.episode}",
                 "/anime/source?id=$encodedId&site=main&plan=standard&season=${ref.season}&episode=${ref.episode}&server=1",
                 "/anime/source?anime_id=$encodedId&season=${ref.season}&episode=${ref.episode}",
+                // Android client also exposes bulk-source; keep it strictly as a public fallback.
+                "/anime/bulk-source?id=$encodedId&season=${ref.season}&episode=${ref.episode}",
+                "/anime/bulk-source?anime_id=$encodedId&season=${ref.season}&episode=${ref.episode}",
             )
             for (path in paths) {
                 val sourceNode = AniziumApi.getJson(path) ?: continue
@@ -192,10 +196,10 @@ class Anizium : MainAPI() {
 
         val title = AniziumApi.text(
             source,
-            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+            "name", "title", "animeName", "anime_name", "original_name", "originalName", "name_jp", "nameJp",
         ) ?: AniziumApi.text(
             this,
-            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+            "name", "title", "animeName", "anime_name", "original_name", "originalName", "name_jp", "nameJp",
         ) ?: return null
 
         val id = AniziumApi.text(
@@ -210,11 +214,11 @@ class Anizium : MainAPI() {
         val poster = AniziumApi.text(
             source,
             "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
-            "mobile_poster_link", "mobilePosterLink",
+            "mobile_poster_link", "mobilePosterLink", "anime_poster", "animePoster",
         ) ?: AniziumApi.text(
             this,
             "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
-            "mobile_poster_link", "mobilePosterLink",
+            "mobile_poster_link", "mobilePosterLink", "anime_poster", "animePoster",
         )
         val type = (AniziumApi.text(source, "type", "mediaType", "media_type", "contentType", "content_type")
             ?: AniziumApi.text(this, "type", "mediaType", "media_type", "contentType", "content_type")
@@ -238,25 +242,31 @@ class Anizium : MainAPI() {
         var emitted = false
 
         // The current TV client explicitly parses direct sources before grouped sources.
-        val directSources = AniziumApi.array(root, "sources")
+        val directSources = AniziumApi.array(root, "sources", "videos", "video_sources", "videoSources")
         if (emitSourceItems(directSources, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
             emitted = true
         }
 
         if (directSources.isEmpty()) {
-            val fallbackDirect = AniziumApi.array(root, "items", "links")
+            val fallbackDirect = AniziumApi.array(root, "items", "links", "playback_sources", "playbackSources")
             if (emitSourceItems(fallbackDirect, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
                 emitted = true
             }
         }
 
-        val groups = AniziumApi.array(root, "groups", "sound_groups", "soundGroups", "servers")
+        val groups = AniziumApi.array(
+            root,
+            "groups", "sound_groups", "soundGroups", "audio_groups", "audioGroups", "audio", "servers",
+        )
         for (group in groups) {
             val groupSound = AniziumApi.text(
                 group,
                 "sound_group", "soundGroup", "group", "sound", "name", "audio", "language", "lang",
             ) ?: ""
-            val groupedSources = AniziumApi.array(group, "sources", "items", "links")
+            val groupedSources = AniziumApi.array(
+                group,
+                "sources", "items", "links", "videos", "video_sources", "videoSources",
+            )
             if (groupedSources.isNotEmpty()) {
                 if (emitSourceItems(groupedSources, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
                     emitted = true
@@ -316,7 +326,10 @@ class Anizium : MainAPI() {
             item,
             "sound_group", "soundGroup", "audio", "group", "sound", "language", "lang",
         ) ?: groupSound
-        val qualityText = AniziumApi.text(item, "resolution", "quality", "height", "label") ?: ""
+        val qualityText = AniziumApi.text(
+            item,
+            "resolution", "quality", "source_quality", "sourceQuality", "height", "label",
+        ) ?: ""
         val quality = inferQuality("$qualityText $link")
 
         callback(newExtractorLink(name, buildLabel(quality, sound), link) {
