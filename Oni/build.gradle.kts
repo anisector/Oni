@@ -1,7 +1,7 @@
-// v34: audited against current Android/TV client schema and public source routes.
-version = 34
+// v35: aggregate all available video qualities, audio groups and subtitle tracks.
+version = 35
 cloudstream {
-    description = "Anizium provider - Android/TV API routes, bulk-source fallback and current source fields"
+    description = "Anizium provider - multi-quality, multi-audio and multi-subtitle source aggregation"
     authors = listOf("kerimmkirac", "ByAyzen", "anisector")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")

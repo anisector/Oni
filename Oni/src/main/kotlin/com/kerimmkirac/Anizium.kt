@@ -159,6 +159,9 @@ class Anizium : MainAPI() {
     ): Boolean {
         val ref = runCatching { mapper.readValue(data, EpisodeRef::class.java) }.getOrNull() ?: return false
         val ids = listOfNotNull(ref.animeId, ref.episodeId).distinct()
+        val seenLinks = mutableSetOf<String>()
+        val seenSubtitles = mutableSetOf<String>()
+        var emitted = false
 
         for (id in ids) {
             val encodedId = AniziumApi.encode(id)
@@ -174,10 +177,12 @@ class Anizium : MainAPI() {
             )
             for (path in paths) {
                 val sourceNode = AniziumApi.getJson(path) ?: continue
-                if (emitApiSources(sourceNode, subtitleCallback, callback)) return true
+                if (emitApiSources(sourceNode, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                    emitted = true
+                }
             }
         }
-        return false
+        return emitted
     }
 
     private fun extractItems(root: JsonNode): List<JsonNode> {
@@ -233,28 +238,32 @@ class Anizium : MainAPI() {
 
     private suspend fun emitApiSources(
         node: JsonNode,
+        seenLinks: MutableSet<String>,
+        seenSubtitles: MutableSet<String>,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val root = AniziumApi.unwrap(node)
-        val seenLinks = mutableSetOf<String>()
-        val seenSubtitles = mutableSetOf<String>()
         var emitted = false
 
-        // The current TV client explicitly parses direct sources before grouped sources.
-        val directSources = AniziumApi.array(root, "sources", "videos", "video_sources", "videoSources")
+        // Merge every source container. Different qualities can be split across sibling arrays.
+        val directSources = collectArrays(
+            root,
+            "sources", "videos", "video_sources", "videoSources", "streams", "qualities",
+        )
         if (emitSourceItems(directSources, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
             emitted = true
         }
 
-        if (directSources.isEmpty()) {
-            val fallbackDirect = AniziumApi.array(root, "items", "links", "playback_sources", "playbackSources")
-            if (emitSourceItems(fallbackDirect, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
-                emitted = true
-            }
+        val fallbackDirect = collectArrays(
+            root,
+            "items", "links", "playback_sources", "playbackSources", "playback", "files",
+        )
+        if (emitSourceItems(fallbackDirect, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
+            emitted = true
         }
 
-        val groups = AniziumApi.array(
+        val groups = collectArrays(
             root,
             "groups", "sound_groups", "soundGroups", "audio_groups", "audioGroups", "audio", "servers",
         )
@@ -262,26 +271,40 @@ class Anizium : MainAPI() {
             val groupSound = AniziumApi.text(
                 group,
                 "sound_group", "soundGroup", "group", "sound", "name", "audio", "language", "lang",
+                "audio_type", "audioType", "dub", "dub_type", "dubType",
             ) ?: ""
-            val groupedSources = AniziumApi.array(
+            val groupedSources = collectArrays(
                 group,
                 "sources", "items", "links", "videos", "video_sources", "videoSources",
+                "streams", "qualities", "playback_sources", "playbackSources",
             )
-            if (groupedSources.isNotEmpty()) {
-                if (emitSourceItems(groupedSources, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
-                    emitted = true
-                }
-            } else if (emitSourceItem(group, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+            if (emitSourceItems(groupedSources, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                emitted = true
+            }
+            if (emitSourceItem(group, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
                 emitted = true
             }
             emitSubtitles(group, groupSound, seenSubtitles, subtitleCallback)
         }
 
-        if (!emitted && emitSourceItem(root, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
+        if (emitSourceItem(root, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
             emitted = true
         }
         emitSubtitles(root, "", seenSubtitles, subtitleCallback)
         return emitted
+    }
+
+    private fun collectArrays(node: JsonNode?, vararg names: String): List<JsonNode> {
+        if (node == null) return emptyList()
+        val result = mutableListOf<JsonNode>()
+        val seen = mutableSetOf<String>()
+        for (name in names) {
+            for (item in AniziumApi.array(node, name)) {
+                val key = item.toString()
+                if (seen.add(key)) result.add(item)
+            }
+        }
+        return result
     }
 
     private suspend fun emitSourceItems(
@@ -309,40 +332,53 @@ class Anizium : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
+        var emitted = false
+
+        // Some responses put each quality inside nested streams/qualities instead of one flat source array.
+        val nestedSources = collectArrays(
+            item,
+            "sources", "videos", "video_sources", "videoSources", "streams", "qualities",
+            "items", "links", "playback_sources", "playbackSources",
+        )
+        if (nestedSources.isNotEmpty() &&
+            emitSourceItems(nestedSources, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)
+        ) {
+            emitted = true
+        }
+
         val link = AniziumApi.text(
             item,
             "source_url", "sourceUrl", "playback_source_url", "playbackSourceUrl",
-            "url", "link", "src", "file",
-        ) ?: run {
-            emitSubtitles(item, groupSound, seenSubtitles, subtitleCallback)
-            return false
-        }
-        if (!link.startsWith("http") || !seenLinks.add(link)) {
-            emitSubtitles(item, groupSound, seenSubtitles, subtitleCallback)
-            return false
+            "stream_url", "streamUrl", "video_url", "videoUrl",
+            "url", "link", "src", "file", "hls", "m3u8",
+        )
+        if (link?.startsWith("http") == true && seenLinks.add(link)) {
+            val sound = AniziumApi.text(
+                item,
+                "sound_group", "soundGroup", "audio", "group", "sound", "language", "lang",
+                "audio_type", "audioType", "dub", "dub_type", "dubType",
+            ) ?: groupSound
+            val qualityText = AniziumApi.text(
+                item,
+                "resolution", "quality", "source_quality", "sourceQuality",
+                "source_resolution", "sourceResolution", "video_quality", "videoQuality", "height", "label",
+            ) ?: ""
+            val quality = inferQuality("$qualityText $link")
+
+            callback(newExtractorLink(name, buildLabel(quality, sound), link) {
+                type = if (link.contains(".m3u8", true) || link.contains("m3u8", true)) {
+                    ExtractorLinkType.M3U8
+                } else {
+                    ExtractorLinkType.VIDEO
+                }
+                this.quality = quality
+                referer = "$mainUrl/"
+            })
+            emitted = true
         }
 
-        val sound = AniziumApi.text(
-            item,
-            "sound_group", "soundGroup", "audio", "group", "sound", "language", "lang",
-        ) ?: groupSound
-        val qualityText = AniziumApi.text(
-            item,
-            "resolution", "quality", "source_quality", "sourceQuality", "height", "label",
-        ) ?: ""
-        val quality = inferQuality("$qualityText $link")
-
-        callback(newExtractorLink(name, buildLabel(quality, sound), link) {
-            type = if (link.contains(".m3u8", true) || link.contains("m3u8", true)) {
-                ExtractorLinkType.M3U8
-            } else {
-                ExtractorLinkType.VIDEO
-            }
-            this.quality = quality
-            referer = "$mainUrl/"
-        })
-        emitSubtitles(item, sound, seenSubtitles, subtitleCallback)
-        return true
+        emitSubtitles(item, groupSound, seenSubtitles, subtitleCallback)
+        return emitted
     }
 
     private fun emitSubtitles(
@@ -351,21 +387,38 @@ class Anizium : MainAPI() {
         seenSubtitles: MutableSet<String>,
         subtitleCallback: (SubtitleFile) -> Unit,
     ) {
-        val directUrl = AniziumApi.text(node, "subtitleUrl", "subtitle_url")
-        if (directUrl?.startsWith("http") == true && seenSubtitles.add(directUrl)) {
+        val directUrls = listOfNotNull(
+            AniziumApi.text(node, "subtitleUrl", "subtitle_url"),
+            AniziumApi.text(node, "captionUrl", "caption_url"),
+            AniziumApi.text(node, "trackUrl", "track_url"),
+        ).distinct()
+
+        for (directUrl in directUrls) {
+            if (!directUrl.startsWith("http") || !seenSubtitles.add(directUrl)) continue
             val label = AniziumApi.text(
                 node,
-                "subtitle_group", "subtitleGroup", "subtitle_language", "subtitleLanguage", "language", "lang",
+                "subtitle_group", "subtitleGroup", "subtitle_language", "subtitleLanguage",
+                "language", "lang", "locale", "language_code", "languageCode", "label", "name", "title",
             ) ?: fallbackLabel.ifBlank { "Türkçe" }
             subtitleCallback(SubtitleFile(label, directUrl))
         }
 
-        for (sub in AniziumApi.array(node, "subtitles", "subtitle", "captions")) {
-            val link = AniziumApi.text(sub, "subtitleUrl", "subtitle_url", "url", "link", "src", "file") ?: continue
+        val subtitles = collectArrays(
+            node,
+            "subtitles", "subtitle", "captions", "tracks",
+            "subtitle_tracks", "subtitleTracks", "text_tracks", "textTracks",
+        )
+        for (sub in subtitles) {
+            val link = AniziumApi.text(
+                sub,
+                "subtitleUrl", "subtitle_url", "captionUrl", "caption_url", "trackUrl", "track_url",
+                "url", "link", "src", "file", "source_url", "sourceUrl",
+            ) ?: continue
             if (!link.startsWith("http") || !seenSubtitles.add(link)) continue
             val label = AniziumApi.text(
                 sub,
-                "subtitle_group", "subtitleGroup", "group", "language", "lang", "label", "name",
+                "subtitle_group", "subtitleGroup", "group", "subtitle_language", "subtitleLanguage",
+                "language", "lang", "locale", "language_code", "languageCode", "label", "name", "title",
             ) ?: fallbackLabel.ifBlank { "Türkçe" }
             subtitleCallback(SubtitleFile(label, link))
         }
