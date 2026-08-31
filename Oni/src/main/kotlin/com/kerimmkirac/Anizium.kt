@@ -274,7 +274,7 @@ class Anizium : MainAPI() {
         return emitted
     }
 
-    private fun emitSourceItems(
+    private suspend fun emitSourceItems(
         items: List<JsonNode>,
         groupSound: String,
         seenLinks: MutableSet<String>,
@@ -291,7 +291,7 @@ class Anizium : MainAPI() {
         return emitted
     }
 
-    private fun emitSourceItem(
+    private suspend fun emitSourceItem(
         item: JsonNode,
         groupSound: String,
         seenLinks: MutableSet<String>,
