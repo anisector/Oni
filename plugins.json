@@ -1,0 +1,18 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/Anizium.cs3",
+    "status": 1,
+    "version": 25,
+    "name": "Anizium",
+    "internalName": "Anizium",
+    "authors": ["kerimmkirac", "ByAyzen"],
+    "description": "Anizium ile dünyada ilk ve tek 4K Türkçe dublaj platformunda anime keyfini yaşa. En yeni animeleri İngilizce altyazı ve dublaj seçenekleriyle 1080p ve 4K kalitesinde HD izle.",
+    "fileSize": 80371,
+    "repositoryUrl": "https://github.com/anisector/Oni",
+    "language": "tr",
+    "tvTypes": ["AnimeMovie", "Anime"],
+    "iconUrl": "https://anizium.co/assets/images/logo.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-8ae8ce4c9e53f6c95530d0ffb8070c8469f4c1d8ea93247f2ef28d6dc7e351fb"
+  }
+]
