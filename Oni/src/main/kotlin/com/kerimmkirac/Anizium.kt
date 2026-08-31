@@ -55,39 +55,34 @@ class Anizium : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val animeId = Regex("[?&]id=([^&]+)").find(url)?.groupValues?.get(1)
-            ?: Regex("/anime/(\\d+)").find(url)?.groupValues?.get(1)
-            ?: url.substringAfterLast('/').takeIf { it.matches(Regex("\\d+")) }
+            ?: Regex("/anime/([^/?#]+)").find(url)?.groupValues?.get(1)
+            ?: url.substringAfterLast('/').substringBefore('?').takeIf { it.isNotBlank() }
             ?: return null
 
+        val encodedId = AniziumApi.encode(animeId)
         val node = AniziumApi.firstJson(
-            "/anime/get?id=${AniziumApi.encode(animeId)}",
-            "/anime/$animeId",
+            "/anime/get?id=$encodedId",
+            "/anime/$encodedId",
         ) ?: return null
         val root = AniziumApi.unwrap(node)
-        val title = AniziumApi.text(root, "name", "title", "animeName", "anime_name") ?: return null
-        val poster = AniziumApi.text(root, "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url")
-        val plot = AniziumApi.text(root, "overview", "description", "synopsis", "summary")
-        val year = AniziumApi.int(root, "year", "release_year")
-        val type = (AniziumApi.text(root, "type", "mediaType", "contentType") ?: "series").lowercase()
-        val tmdb = AniziumApi.text(root, "tmdb_id", "tmdbId") ?: ""
-        val seasons = AniziumApi.array(root, "seasons")
+        val title = AniziumApi.text(
+            root,
+            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+        ) ?: return null
+        val poster = AniziumApi.text(
+            root,
+            "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
+            "mobile_poster_link", "mobilePosterLink",
+        )
+        val plot = AniziumApi.text(
+            root,
+            "overview", "overview_short", "overviewShort", "description", "synopsis", "summary",
+        )
+        val year = AniziumApi.int(root, "year", "release_year", "releaseYear")
+        val type = (AniziumApi.text(root, "type", "mediaType", "media_type", "contentType", "content_type") ?: "series").lowercase()
+        val tmdb = AniziumApi.text(root, "tmdb_id", "tmdbId", "tmdb") ?: ""
 
-        val episodeList = buildList {
-            for (seasonNode in seasons) {
-                val seasonNo = AniziumApi.int(seasonNode, "number", "season", "seasonNumber", "season_number") ?: 1
-                for (episodeNode in AniziumApi.array(seasonNode, "episodes")) {
-                    val epNo = AniziumApi.int(episodeNode, "number", "episode", "episodeNumber", "episode_number") ?: 0
-                    val epId = AniziumApi.text(episodeNode, "ID", "id", "episodeId", "episode_id")
-                    val epTitle = AniziumApi.text(episodeNode, "name", "title", "episodeTitle") ?: "Bölüm $epNo"
-                    val ref = EpisodeRef(animeId, tmdb, seasonNo, epNo, epId, false)
-                    add(newEpisode(mapper.writeValueAsString(ref)) {
-                        name = epTitle
-                        episode = epNo
-                        season = seasonNo
-                    })
-                }
-            }
-        }
+        val episodeList = buildEpisodes(root, animeId, tmdb)
 
         return if (type.contains("movie") || type == "film") {
             val movieRef = EpisodeRef(animeId, tmdb, 1, 1, null, true)
@@ -105,6 +100,57 @@ class Anizium : MainAPI() {
         }
     }
 
+    private fun buildEpisodes(root: JsonNode, animeId: String, tmdb: String): List<Episode> {
+        val result = mutableListOf<Episode>()
+        val seasons = AniziumApi.array(root, "seasons")
+
+        if (seasons.isNotEmpty()) {
+            for (seasonNode in seasons) {
+                val seasonNo = AniziumApi.int(
+                    seasonNode,
+                    "number", "season", "seasonNumber", "season_number",
+                ) ?: 1
+                val episodes = AniziumApi.array(seasonNode, "episodes", "items")
+                for (episodeNode in episodes) {
+                    addEpisode(result, episodeNode, animeId, tmdb, seasonNo)
+                }
+            }
+        } else {
+            for (episodeNode in AniziumApi.array(root, "episodes", "items")) {
+                val seasonNo = AniziumApi.int(
+                    episodeNode,
+                    "season", "seasonNumber", "season_number",
+                ) ?: 1
+                addEpisode(result, episodeNode, animeId, tmdb, seasonNo)
+            }
+        }
+        return result
+    }
+
+    private fun addEpisode(
+        target: MutableList<Episode>,
+        episodeNode: JsonNode,
+        animeId: String,
+        tmdb: String,
+        seasonNo: Int,
+    ) {
+        val epNo = AniziumApi.int(
+            episodeNode,
+            "number", "episode", "episodeNumber", "episode_number",
+        ) ?: 0
+        val epId = AniziumApi.text(episodeNode, "ID", "id", "episodeId", "episode_id")
+        val epTitle = AniziumApi.text(
+            episodeNode,
+            "name", "title", "episodeTitle", "episode_name",
+        ) ?: "Bölüm $epNo"
+        val ref = EpisodeRef(animeId, tmdb, seasonNo, epNo, epId, false)
+        target.add(newEpisode(mapper.writeValueAsString(ref)) {
+            name = epTitle
+            episode = epNo
+            season = seasonNo
+        })
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -112,23 +158,29 @@ class Anizium : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val ref = runCatching { mapper.readValue(data, EpisodeRef::class.java) }.getOrNull() ?: return false
+        val ids = listOfNotNull(ref.animeId, ref.episodeId).distinct()
 
-        for (plan in listOf("standart", "standard", "premium")) {
-            val sourceNode = AniziumApi.getJson(
-                "/anime/source?id=${AniziumApi.encode(ref.animeId)}&site=main&plan=$plan&season=${ref.season}&episode=${ref.episode}&server=1"
+        for (id in ids) {
+            val encodedId = AniziumApi.encode(id)
+            val paths = listOf(
+                "/anime/source?id=$encodedId&season=${ref.season}&episode=${ref.episode}",
+                "/anime/source?id=$encodedId&site=main&season=${ref.season}&episode=${ref.episode}",
+                "/anime/source?id=$encodedId&site=main&plan=standard&season=${ref.season}&episode=${ref.episode}&server=1",
+                "/anime/source?anime_id=$encodedId&season=${ref.season}&episode=${ref.episode}",
             )
-            if (sourceNode != null && emitApiSources(sourceNode, subtitleCallback, callback)) return true
+            for (path in paths) {
+                val sourceNode = AniziumApi.getJson(path) ?: continue
+                if (emitApiSources(sourceNode, subtitleCallback, callback)) return true
+            }
         }
-
-        if (ref.tmdbId.isNotBlank() && probePublicCdn(ref, callback)) return true
         return false
     }
 
     private fun extractItems(root: JsonNode): List<JsonNode> {
-        val direct = AniziumApi.array(root, "items", "results", "animes", "anime", "episodes", "data")
+        val direct = AniziumApi.array(root, "items", "results", "animes", "anime", "episodes", "data", "list", "content")
         if (direct.isNotEmpty()) return direct
         val page = root.get("page")
-        val pageData = AniziumApi.array(page, "data", "items", "results", "animes", "anime", "episodes")
+        val pageData = AniziumApi.array(page, "data", "items", "results", "animes", "anime", "episodes", "list", "content")
         if (pageData.isNotEmpty()) return pageData
         return AniziumApi.findFirstArray(root)
     }
@@ -138,19 +190,35 @@ class Anizium : MainAPI() {
             .mapNotNull { get(it) }
             .firstOrNull { it.isObject } ?: this
 
-        val title = AniziumApi.text(source, "name", "title", "animeName", "anime_name")
-            ?: AniziumApi.text(this, "name", "title", "animeName", "anime_name")
-            ?: return null
+        val title = AniziumApi.text(
+            source,
+            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+        ) ?: AniziumApi.text(
+            this,
+            "name", "title", "animeName", "anime_name", "original_name", "originalName",
+        ) ?: return null
 
-        val id = AniziumApi.text(source, "ID", "id", "animeId", "anime_id", "slug", "animeSlug", "anime_slug")
-            ?: AniziumApi.text(this, "ID", "id", "animeId", "anime_id", "slug", "animeSlug", "anime_slug")
-            ?: return null
+        val id = AniziumApi.text(
+            source,
+            "ID", "id", "animeId", "anime_id", "slug", "animeSlug", "anime_slug",
+        ) ?: AniziumApi.text(
+            this,
+            "ID", "id", "animeId", "anime_id", "slug", "animeSlug", "anime_slug",
+        ) ?: return null
 
         val href = if (id.startsWith("http")) id else "$mainUrl/anime/$id"
-        val poster = AniziumApi.text(source, "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url")
-            ?: AniziumApi.text(this, "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url")
-        val type = (AniziumApi.text(source, "type", "mediaType", "contentType")
-            ?: AniziumApi.text(this, "type", "mediaType", "contentType") ?: "series").lowercase()
+        val poster = AniziumApi.text(
+            source,
+            "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
+            "mobile_poster_link", "mobilePosterLink",
+        ) ?: AniziumApi.text(
+            this,
+            "poster", "posterUrl", "poster_url", "image", "cover", "coverUrl", "cover_url",
+            "mobile_poster_link", "mobilePosterLink",
+        )
+        val type = (AniziumApi.text(source, "type", "mediaType", "media_type", "contentType", "content_type")
+            ?: AniziumApi.text(this, "type", "mediaType", "media_type", "contentType", "content_type")
+            ?: "series").lowercase()
 
         return if (type.contains("movie") || type == "film") {
             newMovieSearchResponse(title, href, TvType.AnimeMovie) { posterUrl = poster }
@@ -165,87 +233,138 @@ class Anizium : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val root = AniziumApi.unwrap(node)
+        val seenLinks = mutableSetOf<String>()
+        val seenSubtitles = mutableSetOf<String>()
         var emitted = false
-        val groups = AniziumApi.array(root, "groups", "servers", "sources")
-        for (group in groups) {
-            val sound = AniziumApi.text(group, "group", "sound", "name", "lang") ?: ""
-            val sourceItems = AniziumApi.array(group, "items", "sources", "links")
-            if (sourceItems.isNotEmpty()) {
-                for (item in sourceItems) {
-                    val link = AniziumApi.text(item, "link", "url", "src", "file") ?: continue
-                    if (!link.startsWith("http")) continue
-                    val quality = AniziumApi.int(item, "quality", "resolution") ?: inferQuality(link)
-                    callback(newExtractorLink(name, buildLabel(quality, sound), link) {
-                        type = if (link.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        this.quality = quality
-                        referer = "$mainUrl/"
-                    })
-                    emitted = true
-                }
-            } else {
-                val link = AniziumApi.text(group, "link", "url", "src", "file")
-                if (link?.startsWith("http") == true) {
-                    val quality = AniziumApi.int(group, "quality", "resolution") ?: inferQuality(link)
-                    callback(newExtractorLink(name, buildLabel(quality, sound), link) {
-                        type = if (link.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        this.quality = quality
-                        referer = "$mainUrl/"
-                    })
-                    emitted = true
-                }
+
+        // The current TV client explicitly parses direct sources before grouped sources.
+        val directSources = AniziumApi.array(root, "sources")
+        if (emitSourceItems(directSources, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
+            emitted = true
+        }
+
+        if (directSources.isEmpty()) {
+            val fallbackDirect = AniziumApi.array(root, "items", "links")
+            if (emitSourceItems(fallbackDirect, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                emitted = true
             }
         }
 
-        for (sub in AniziumApi.array(root, "subtitles", "subtitle", "captions")) {
-            val link = AniziumApi.text(sub, "link", "url", "src", "file") ?: continue
-            if (link.startsWith("http")) {
-                val language = AniziumApi.text(sub, "group", "language", "lang", "label") ?: "Türkçe"
-                subtitleCallback(SubtitleFile(language, link))
+        val groups = AniziumApi.array(root, "groups", "sound_groups", "soundGroups", "servers")
+        for (group in groups) {
+            val groupSound = AniziumApi.text(
+                group,
+                "sound_group", "soundGroup", "group", "sound", "name", "audio", "language", "lang",
+            ) ?: ""
+            val groupedSources = AniziumApi.array(group, "sources", "items", "links")
+            if (groupedSources.isNotEmpty()) {
+                if (emitSourceItems(groupedSources, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                    emitted = true
+                }
+            } else if (emitSourceItem(group, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                emitted = true
+            }
+            emitSubtitles(group, groupSound, seenSubtitles, subtitleCallback)
+        }
+
+        if (!emitted && emitSourceItem(root, "", seenLinks, seenSubtitles, subtitleCallback, callback)) {
+            emitted = true
+        }
+        emitSubtitles(root, "", seenSubtitles, subtitleCallback)
+        return emitted
+    }
+
+    private fun emitSourceItems(
+        items: List<JsonNode>,
+        groupSound: String,
+        seenLinks: MutableSet<String>,
+        seenSubtitles: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        var emitted = false
+        for (item in items) {
+            if (emitSourceItem(item, groupSound, seenLinks, seenSubtitles, subtitleCallback, callback)) {
+                emitted = true
             }
         }
         return emitted
     }
 
-    private suspend fun probePublicCdn(ref: EpisodeRef, callback: (ExtractorLink) -> Unit): Boolean {
-        val servers = listOf(
-            "https://x.aniziumserver.sbs", "https://f.aniziumserver.sbs", "https://a.aniziumserver.sbs",
-            "https://k.aniziumserver.sbs", "https://r.aniziumserver.sbs", "https://u.aniziumserver.sbs",
-            "https://x.aniziumserver.site", "https://f.aniziumserver.site", "https://a.aniziumserver.site",
-            "https://k.aniziumserver.site", "https://r.aniziumserver.site", "https://u.aniziumserver.site",
-        )
-        val qualities = listOf(2160, 1440, 1080, 720, 480)
-        val sounds = listOf("original", "trdub", "endub", "trsub")
-        for (quality in qualities) {
-            var found = false
-            for (sound in sounds) {
-                val path = if (ref.movie) {
-                    "/${ref.tmdbId}/${quality}p-$sound/master.m3u8"
-                } else {
-                    "/${ref.tmdbId}/${ref.season}/${ref.episode}/${quality}p-$sound/master.m3u8"
-                }
-                val server = servers.firstOrNull { candidate ->
-                    runCatching {
-                        app.get("$candidate$path", headers = mapOf("User-Agent" to "Mozilla/5.0")).isSuccessful
-                    }.getOrDefault(false)
-                } ?: continue
-                callback(newExtractorLink(name, buildLabel(quality, sound), "$server$path") {
-                    type = ExtractorLinkType.M3U8
-                    this.quality = quality
-                    referer = "$mainUrl/"
-                })
-                found = true
-            }
-            if (found) return true
+    private fun emitSourceItem(
+        item: JsonNode,
+        groupSound: String,
+        seenLinks: MutableSet<String>,
+        seenSubtitles: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val link = AniziumApi.text(
+            item,
+            "source_url", "sourceUrl", "playback_source_url", "playbackSourceUrl",
+            "url", "link", "src", "file",
+        ) ?: run {
+            emitSubtitles(item, groupSound, seenSubtitles, subtitleCallback)
+            return false
         }
-        return false
+        if (!link.startsWith("http") || !seenLinks.add(link)) {
+            emitSubtitles(item, groupSound, seenSubtitles, subtitleCallback)
+            return false
+        }
+
+        val sound = AniziumApi.text(
+            item,
+            "sound_group", "soundGroup", "audio", "group", "sound", "language", "lang",
+        ) ?: groupSound
+        val qualityText = AniziumApi.text(item, "resolution", "quality", "height", "label") ?: ""
+        val quality = inferQuality("$qualityText $link")
+
+        callback(newExtractorLink(name, buildLabel(quality, sound), link) {
+            type = if (link.contains(".m3u8", true) || link.contains("m3u8", true)) {
+                ExtractorLinkType.M3U8
+            } else {
+                ExtractorLinkType.VIDEO
+            }
+            this.quality = quality
+            referer = "$mainUrl/"
+        })
+        emitSubtitles(item, sound, seenSubtitles, subtitleCallback)
+        return true
     }
 
-    private fun inferQuality(url: String): Int = when {
-        Regex("2160|4k", RegexOption.IGNORE_CASE).containsMatchIn(url) -> 2160
-        Regex("1440|2k", RegexOption.IGNORE_CASE).containsMatchIn(url) -> 1440
-        Regex("1080|fullhd", RegexOption.IGNORE_CASE).containsMatchIn(url) -> 1080
-        Regex("720", RegexOption.IGNORE_CASE).containsMatchIn(url) -> 720
-        Regex("480", RegexOption.IGNORE_CASE).containsMatchIn(url) -> 480
+    private fun emitSubtitles(
+        node: JsonNode,
+        fallbackLabel: String,
+        seenSubtitles: MutableSet<String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+    ) {
+        val directUrl = AniziumApi.text(node, "subtitleUrl", "subtitle_url")
+        if (directUrl?.startsWith("http") == true && seenSubtitles.add(directUrl)) {
+            val label = AniziumApi.text(
+                node,
+                "subtitle_group", "subtitleGroup", "subtitle_language", "subtitleLanguage", "language", "lang",
+            ) ?: fallbackLabel.ifBlank { "Türkçe" }
+            subtitleCallback(SubtitleFile(label, directUrl))
+        }
+
+        for (sub in AniziumApi.array(node, "subtitles", "subtitle", "captions")) {
+            val link = AniziumApi.text(sub, "subtitleUrl", "subtitle_url", "url", "link", "src", "file") ?: continue
+            if (!link.startsWith("http") || !seenSubtitles.add(link)) continue
+            val label = AniziumApi.text(
+                sub,
+                "subtitle_group", "subtitleGroup", "group", "language", "lang", "label", "name",
+            ) ?: fallbackLabel.ifBlank { "Türkçe" }
+            subtitleCallback(SubtitleFile(label, link))
+        }
+    }
+
+    private fun inferQuality(value: String): Int = when {
+        Regex("2160|4k", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 2160
+        Regex("1440|2k", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 1440
+        Regex("1080|fullhd|full hd", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 1080
+        Regex("720", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 720
+        Regex("480", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 480
+        Regex("360", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 360
         else -> 0
     }
 
@@ -256,12 +375,13 @@ class Anizium : MainAPI() {
             0 -> "Otomatik"
             else -> "${quality}p"
         }
-        val s = when (sound.lowercase()) {
-            "trdub" -> "Türkçe Dublaj"
-            "endub" -> "İngilizce Dublaj"
-            "cndub" -> "Çince Dublaj"
-            "trsub" -> "Türkçe Altyazı"
-            "original" -> "Japonca"
+        val normalized = sound.lowercase().replace("-", "").replace("_", "").replace(" ", "")
+        val s = when (normalized) {
+            "trdub", "trdublaj", "turkishdub" -> "Türkçe Dublaj"
+            "endub", "englishdub" -> "İngilizce Dublaj"
+            "cndub", "chinesedub" -> "Çince Dublaj"
+            "trsub", "traltyazi", "turkishsub" -> "Türkçe Altyazı"
+            "original", "japanese", "japonca" -> "Japonca"
             else -> sound.ifBlank { "Kaynak" }
         }
         return "$q ($s)"

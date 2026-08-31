@@ -14,19 +14,20 @@ object AniziumApi {
     private val mapper = jacksonObjectMapper()
 
     const val WEB = "https://anizium.co"
-    const val API = "https://api.anizium.co"
+    const val WEB_APP = "https://web.anizium.online"
     const val ONLINE = "https://api.anizium.online"
+    const val API = "https://api.anizium.co"
     const val LEGACY = "https://x.anizium.co"
 
-    // Current API protection key recovered from Anizium's live client flow.
+    // Confirmed in the current Android and TV clients.
     private const val CF_TOKEN_KEY = "hlxjl1c2w281ax473rt1ofgrvhyjvi"
+    private const val OFFICIAL_BROWSER_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     private val baseHeaders = mapOf(
         "Accept" to "application/json, text/javascript, */*; q=0.01",
         "Content-Type" to "application/json",
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36",
-        "Origin" to WEB,
-        "Referer" to "$WEB/",
+        "User-Agent" to OFFICIAL_BROWSER_UA,
         "user-profile" to "null",
         "user-session" to "null",
         "language" to "tr",
@@ -61,9 +62,12 @@ object AniziumApi {
     private fun headers(
         cf: Boolean = true,
         deviceType: String = "browser",
+        origin: String = WEB_APP,
         extra: Map<String, String> = emptyMap(),
     ): Map<String, String> = buildMap {
         putAll(baseHeaders)
+        put("Origin", origin)
+        put("Referer", "$origin/")
         put("device", deviceType)
         put("device_type", deviceType)
         if (cf) put("Cf-Control", cfControl())
@@ -71,22 +75,35 @@ object AniziumApi {
     }
 
     suspend fun getJson(path: String): JsonNode? {
-        val bases = listOf(ONLINE, API, WEB, LEGACY)
-        val devices = listOf("browser", "tv", "android")
+        val bases = listOf(ONLINE, API, WEB_APP, WEB, LEGACY)
+        val profiles = listOf(
+            "browser" to WEB_APP,
+            "tv_app" to WEB,
+            "android" to WEB_APP,
+            "browser" to WEB,
+        )
 
         for (base in bases) {
             val url = if (path.startsWith("http")) path else "$base/${path.trimStart('/')}"
-            for (device in devices) {
-                for (useCf in listOf(true, false)) {
-                    try {
-                        val response = app.get(url, headers = headers(cf = useCf, deviceType = device))
-                        if (response.isSuccessful) {
-                            runCatching { return response.parsed<JsonNode>() }
-                        }
-                    } catch (_: Throwable) {
+            for ((device, origin) in profiles) {
+                try {
+                    val response = app.get(url, headers = headers(cf = true, deviceType = device, origin = origin))
+                    if (response.isSuccessful) {
+                        runCatching { return response.parsed<JsonNode>() }
                     }
+                } catch (_: Throwable) {
                 }
             }
+
+            // Some public endpoints do not require Cf-Control. Keep one conservative fallback.
+            try {
+                val response = app.get(url, headers = headers(cf = false, deviceType = "browser", origin = WEB_APP))
+                if (response.isSuccessful) {
+                    runCatching { return response.parsed<JsonNode>() }
+                }
+            } catch (_: Throwable) {
+            }
+
             if (path.startsWith("http")) break
         }
         return null

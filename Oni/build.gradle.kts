@@ -1,6 +1,6 @@
-version = 32
+version = 33
 cloudstream {
-    description = "Anizium provider - current official app API routes and resilient headers"
+    description = "Anizium provider - official Android/TV public API model and grouped source parsing"
     authors = listOf("kerimmkirac", "ByAyzen", "anisector")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")
