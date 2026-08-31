@@ -158,7 +158,7 @@ class Anizium : MainAPI() {
         }
     }
 
-    private fun buildEpisodes(root: JsonNode, animeId: String, tmdb: String): List<Episode> {
+    internal fun buildEpisodes(root: JsonNode, animeId: String, tmdb: String): List<Episode> {
         val out = mutableListOf<Episode>()
         val seen = mutableSetOf<String>()
         val seasons = collectArrays(root, "seasons", "season_list", "seasonList")
@@ -347,7 +347,7 @@ class Anizium : MainAPI() {
         )
         if (link?.startsWith("http") == true) {
             val key = "${link.trim()}|${normalize(sound)}"
-            if (seenLinks.add(key)) {
+            if (!seenLinks.contains(key)) {
                 val qualityText = AniziumApi.text(
                     item, "resolution", "quality", "source_quality", "sourceQuality", "source_resolution",
                     "sourceResolution", "video_quality", "videoQuality", "height", "label",
@@ -356,15 +356,23 @@ class Anizium : MainAPI() {
                 val referer = sourceReferer(item, link)
 
                 if (isEmbedSource(item, link)) {
+                    var extractedAny = false
                     loadExtractor(link, referer, subtitleCallback) { extracted ->
                         val extractedKey = "${extracted.url}|${normalize(sound)}"
-                        if (seenLinks.add(extractedKey)) callback(extracted)
+                        if (seenLinks.add(extractedKey)) {
+                            callback(extracted)
+                            extractedAny = true
+                        }
                     }
-                    emitted = true
-                } else {
+                    if (extractedAny) {
+                        seenLinks.add(key)
+                        emitted = true
+                    }
+                } else if (seenLinks.add(key)) {
                     callback(newExtractorLink(name, buildLabel(quality, sound), link, detectLinkType(item, link)) {
                         this.quality = quality
                         this.referer = referer
+                        this.headers = safePlaybackHeaders(item)
                     })
                     emitted = true
                 }
@@ -380,7 +388,7 @@ class Anizium : MainAPI() {
             "audio_type", "audioType", "dub", "dub_type", "dubType",
         ) ?: fallback
 
-    private fun isEmbedSource(item: JsonNode, link: String): Boolean {
+    internal fun isEmbedSource(item: JsonNode, link: String): Boolean {
         val hint = AniziumApi.text(item, "type", "kind", "source_type", "sourceType", "player_type", "playerType")
             ?.lowercase().orEmpty()
         val lower = link.lowercase()
@@ -388,7 +396,7 @@ class Anizium : MainAPI() {
             lower.contains("/embed/") || lower.contains("/embed?") || lower.contains("/player/") || lower.contains("/player?")
     }
 
-    private fun detectLinkType(item: JsonNode, link: String): ExtractorLinkType {
+    internal fun detectLinkType(item: JsonNode, link: String): ExtractorLinkType {
         val hint = AniziumApi.text(item, "mime", "mime_type", "mimeType", "format", "type", "source_type", "sourceType")
             ?.lowercase().orEmpty()
         val lower = link.lowercase()
@@ -399,7 +407,7 @@ class Anizium : MainAPI() {
         }
     }
 
-    private fun sourceReferer(item: JsonNode, link: String): String {
+    internal fun sourceReferer(item: JsonNode, link: String): String {
         val headers = AniziumApi.stringMap(item, "headers", "http_headers", "httpHeaders")
         val explicit = AniziumApi.text(item, "referer", "referrer", "source_referer", "sourceReferer")
             ?: headers.entries.firstOrNull { it.key.equals("referer", true) || it.key.equals("referrer", true) }?.value
@@ -408,6 +416,23 @@ class Anizium : MainAPI() {
             Regex("^(https?://[^/]+)", RegexOption.IGNORE_CASE).find(link)?.groupValues?.getOrNull(1)?.let { return "$it/" }
         }
         return "$mainUrl/"
+    }
+
+    internal fun safePlaybackHeaders(item: JsonNode): Map<String, String> {
+        val raw = AniziumApi.stringMap(item, "headers", "http_headers", "httpHeaders")
+        val safe = linkedMapOf<String, String>()
+        for ((key, value) in raw) {
+            if (value.isBlank()) continue
+            when (key.trim().lowercase()) {
+                "origin" -> safe["Origin"] = value
+                "user-agent", "useragent" -> safe["User-Agent"] = value
+            }
+        }
+        AniziumApi.text(item, "origin", "source_origin", "sourceOrigin")
+            ?.takeIf { it.isNotBlank() }?.let { safe.putIfAbsent("Origin", it) }
+        AniziumApi.text(item, "user_agent", "userAgent", "source_user_agent", "sourceUserAgent")
+            ?.takeIf { it.isNotBlank() }?.let { safe.putIfAbsent("User-Agent", it) }
+        return safe
     }
 
     private fun emitSubtitles(
@@ -446,7 +471,7 @@ class Anizium : MainAPI() {
         emitSubtitle(subtitleLabel(node, fallback), url, seen, callback)
     }
 
-    private fun subtitleLabel(node: JsonNode, fallback: String): String {
+    internal fun subtitleLabel(node: JsonNode, fallback: String): String {
         val raw = AniziumApi.text(
             node, "subtitle_group", "subtitleGroup", "group", "subtitle_language", "subtitleLanguage",
             "language", "lang", "locale", "language_code", "languageCode", "label", "name", "title",
@@ -470,7 +495,7 @@ class Anizium : MainAPI() {
         callback(SubtitleFile(label, url))
     }
 
-    private fun hasNextPage(node: JsonNode, root: JsonNode, page: Int): Boolean {
+    internal fun hasNextPage(node: JsonNode, root: JsonNode, page: Int): Boolean {
         val candidates = mutableListOf(node, root)
         for (key in listOf("pagination", "meta", "page", "paging")) {
             node.get(key)?.let { candidates.add(it) }
@@ -487,7 +512,7 @@ class Anizium : MainAPI() {
         return true
     }
 
-    private fun inferQuality(value: String): Int = when {
+    internal fun inferQuality(value: String): Int = when {
         Regex("2160|4k", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 2160
         Regex("1440|2k", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 1440
         Regex("1080|fullhd|full hd", RegexOption.IGNORE_CASE).containsMatchIn(value) -> 1080
@@ -499,7 +524,7 @@ class Anizium : MainAPI() {
         else -> 0
     }
 
-    private fun buildLabel(quality: Int, sound: String): String {
+    internal fun buildLabel(quality: Int, sound: String): String {
         val q = when (quality) { 2160 -> "4K"; 1440 -> "2K"; 0 -> "Otomatik"; else -> "${quality}p" }
         val s = when (normalize(sound)) {
             "trdub", "trdublaj", "turkishdub", "turkcedublaj" -> "Türkçe Dublaj"
