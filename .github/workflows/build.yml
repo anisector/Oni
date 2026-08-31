@@ -2,7 +2,7 @@ name: Build Oni Anizium plugin
 
 on:
   push:
-    branches: [main]
+    branches: [main, v37-reliability]
     paths:
       - 'Oni/**'
       - 'build.gradle.kts'
@@ -45,6 +45,9 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Run parser regression tests
+        run: gradle :Oni:testDebugUnitTest --stacktrace
 
       - name: Remove stale published binary
         run: rm -f Anizium.cs3
@@ -99,6 +102,7 @@ jobs:
           JSON
 
       - name: Publish fresh plugin files
+        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
