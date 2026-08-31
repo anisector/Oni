@@ -1,6 +1,6 @@
 # Oni
 
-Anizium için bağımsız CloudStream provider deposu.
+CloudStream test provider deposu.
 
 CloudStream repo adresi:
 
