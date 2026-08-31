@@ -2,7 +2,7 @@
   {
     "url": "https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/Anizium.cs3",
     "status": 1,
-    "version": 33,
+    "version": 34,
     "name": "Anizium",
     "internalName": "Anizium",
     "authors": [
@@ -11,7 +11,7 @@
       "anisector"
     ],
     "description": "Anizium current official app API routes CloudStream provider.",
-    "fileSize": 30240,
+    "fileSize": 30225,
     "repositoryUrl": "https://github.com/anisector/Oni",
     "language": "tr",
     "tvTypes": [
@@ -20,6 +20,6 @@
     ],
     "iconUrl": "https://anizium.co/assets/images/logo.png",
     "apiVersion": 1,
-    "fileHash": "sha256-b1597b5a85865542bd616b521fd1324d554f07bf41b3549cea556e028999cc22"
+    "fileHash": "sha256-d313af161ef029259a9bf5f8e6d069629904e89f040585cdafb17a3e6ded414b"
   }
 ]
