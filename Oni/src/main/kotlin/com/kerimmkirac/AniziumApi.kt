@@ -19,10 +19,24 @@ object AniziumApi {
     const val API = "https://api.anizium.co"
     const val LEGACY = "https://x.anizium.co"
 
-    // Confirmed in the current Android and TV clients.
     private const val CF_TOKEN_KEY = "hlxjl1c2w281ax473rt1ofgrvhyjvi"
     private const val OFFICIAL_BROWSER_UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    private data class RequestProfile(val device: String, val origin: String)
+
+    private val apiBases = listOf(ONLINE, API)
+    private val officialProfiles = listOf(
+        RequestProfile("tv_app", WEB),
+        RequestProfile("android", WEB_APP),
+        RequestProfile("browser", WEB_APP),
+    )
+
+    @Volatile
+    private var preferredBase: String? = null
+
+    @Volatile
+    private var preferredProfile: RequestProfile? = null
 
     private val baseHeaders = mapOf(
         "Accept" to "application/json, text/javascript, */*; q=0.01",
@@ -61,52 +75,68 @@ object AniziumApi {
 
     private fun headers(
         cf: Boolean = true,
-        deviceType: String = "browser",
-        origin: String = WEB_APP,
+        profile: RequestProfile,
         extra: Map<String, String> = emptyMap(),
     ): Map<String, String> = buildMap {
         putAll(baseHeaders)
-        put("Origin", origin)
-        put("Referer", "$origin/")
-        put("device", deviceType)
-        put("device_type", deviceType)
+        put("Origin", profile.origin)
+        put("Referer", "${profile.origin}/")
+        put("device", profile.device)
+        put("device_type", profile.device)
         if (cf) put("Cf-Control", cfControl())
         putAll(extra)
     }
 
+    private fun orderedBases(): List<String> = buildList {
+        preferredBase?.let { add(it) }
+        for (base in apiBases) if (!contains(base)) add(base)
+    }
+
+    private fun orderedProfiles(): List<RequestProfile> = buildList {
+        preferredProfile?.let { add(it) }
+        for (profile in officialProfiles) if (!contains(profile)) add(profile)
+    }
+
     suspend fun getJson(path: String): JsonNode? {
-        val bases = listOf(ONLINE, API, WEB_APP, WEB, LEGACY)
-        val profiles = listOf(
-            "browser" to WEB_APP,
-            "tv_app" to WEB,
-            "android" to WEB_APP,
-            "browser" to WEB,
-        )
+        if (path.startsWith("http")) {
+            for (profile in orderedProfiles()) {
+                requestJson(path, profile, cf = true)?.let { return it }
+            }
+            val fallbackProfile = preferredProfile ?: officialProfiles.first()
+            return requestJson(path, fallbackProfile, cf = false)
+        }
 
-        for (base in bases) {
-            val url = if (path.startsWith("http")) path else "$base/${path.trimStart('/')}"
-            for ((device, origin) in profiles) {
-                try {
-                    val response = app.get(url, headers = headers(cf = true, deviceType = device, origin = origin))
-                    if (response.isSuccessful) {
-                        runCatching { return response.parsed<JsonNode>() }
-                    }
-                } catch (_: Throwable) {
+        for (base in orderedBases()) {
+            val url = "$base/${path.trimStart('/')}"
+            for (profile in orderedProfiles()) {
+                val result = requestJson(url, profile, cf = true)
+                if (result != null) {
+                    preferredBase = base
+                    preferredProfile = profile
+                    return result
                 }
             }
 
-            // Some public endpoints do not require Cf-Control. Keep one conservative fallback.
-            try {
-                val response = app.get(url, headers = headers(cf = false, deviceType = "browser", origin = WEB_APP))
-                if (response.isSuccessful) {
-                    runCatching { return response.parsed<JsonNode>() }
-                }
-            } catch (_: Throwable) {
+            // Public endpoints that do not require Cf-Control get one conservative retry per API host.
+            val fallbackProfile = preferredProfile ?: officialProfiles.first()
+            val fallback = requestJson(url, fallbackProfile, cf = false)
+            if (fallback != null) {
+                preferredBase = base
+                preferredProfile = fallbackProfile
+                return fallback
             }
-
-            if (path.startsWith("http")) break
         }
         return null
+    }
+
+    private suspend fun requestJson(url: String, profile: RequestProfile, cf: Boolean): JsonNode? {
+        return try {
+            val response = app.get(url, headers = headers(cf = cf, profile = profile))
+            if (!response.isSuccessful) return null
+            runCatching { response.parsed<JsonNode>() }.getOrNull()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     suspend fun firstJson(vararg paths: String): JsonNode? {
@@ -148,6 +178,22 @@ object AniziumApi {
     fun int(node: JsonNode?, vararg names: String): Int? =
         text(node, *names)?.let { Regex("-?\\d+").find(it)?.value?.toIntOrNull() }
 
+    fun bool(node: JsonNode?, vararg names: String): Boolean? {
+        if (node == null) return null
+        for (name in names) {
+            val v = node.get(name) ?: continue
+            if (v.isBoolean) return v.asBoolean()
+            if (v.isNumber) return v.asInt() != 0
+            if (v.isTextual) {
+                when (v.asText().trim().lowercase()) {
+                    "true", "1", "yes" -> return true
+                    "false", "0", "no", "null", "none" -> return false
+                }
+            }
+        }
+        return null
+    }
+
     fun array(node: JsonNode?, vararg names: String): List<JsonNode> {
         if (node == null) return emptyList()
         for (name in names) {
@@ -155,6 +201,25 @@ object AniziumApi {
             if (v?.isArray == true) return v.toList()
         }
         return emptyList()
+    }
+
+    fun stringMap(node: JsonNode?, vararg names: String): Map<String, String> {
+        if (node == null) return emptyMap()
+        for (name in names) {
+            val value = node.get(name) ?: continue
+            if (!value.isObject) continue
+            val result = linkedMapOf<String, String>()
+            val fields = value.fields()
+            while (fields.hasNext()) {
+                val entry = fields.next()
+                val fieldValue = entry.value
+                if (fieldValue.isValueNode && !fieldValue.isNull) {
+                    result[entry.key] = fieldValue.asText()
+                }
+            }
+            if (result.isNotEmpty()) return result
+        }
+        return emptyMap()
     }
 
     fun findFirstArray(node: JsonNode): List<JsonNode> {
