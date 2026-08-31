@@ -1,4 +1,5 @@
 {
+  "iconUrl": "https://anizium.co/assets/images/logo.png",
   "name": "Oni",
   "description": "Anizium CloudStream provider",
   "manifestVersion": 1,

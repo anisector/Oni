@@ -2,17 +2,24 @@
   {
     "url": "https://raw.githubusercontent.com/anisector/Oni/refs/heads/main/Anizium.cs3",
     "status": 1,
-    "version": 25,
+    "version": 32,
     "name": "Anizium",
     "internalName": "Anizium",
-    "authors": ["kerimmkirac", "ByAyzen"],
-    "description": "Anizium ile dünyada ilk ve tek 4K Türkçe dublaj platformunda anime keyfini yaşa. En yeni animeleri İngilizce altyazı ve dublaj seçenekleriyle 1080p ve 4K kalitesinde HD izle.",
-    "fileSize": 80371,
+    "authors": [
+      "kerimmkirac",
+      "ByAyzen",
+      "anisector"
+    ],
+    "description": "Anizium current official app API routes CloudStream provider.",
+    "fileSize": 29428,
     "repositoryUrl": "https://github.com/anisector/Oni",
     "language": "tr",
-    "tvTypes": ["AnimeMovie", "Anime"],
+    "tvTypes": [
+      "AnimeMovie",
+      "Anime"
+    ],
     "iconUrl": "https://anizium.co/assets/images/logo.png",
     "apiVersion": 1,
-    "fileHash": "sha256-8ae8ce4c9e53f6c95530d0ffb8070c8469f4c1d8ea93247f2ef28d6dc7e351fb"
+    "fileHash": "sha256-76c2d48234266502c1cb58af828fefb01e23672abef8a82c6f5d5c705b7f4d01"
   }
 ]
