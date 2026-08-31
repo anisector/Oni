@@ -1,10 +1,14 @@
-// v36: current app schema hardening, dynamic genres, pagination and API host caching.
-version = 36
+// v37: playback reliability, safe source headers and parser regression tests.
+version = 37
 cloudstream {
-    description = "Anizium provider - dynamic genres, resilient pagination, multi-source playback and cached official API routing"
+    description = "Anizium provider - verified embed success, safe playback headers and parser regression tests"
     authors = listOf("kerimmkirac", "ByAyzen", "anisector")
     status = 1
     tvTypes = listOf("Anime", "AnimeMovie")
     language = "tr"
     iconUrl = "https://anizium.co/assets/images/logo.png"
+}
+
+dependencies {
+    add("testImplementation", "junit:junit:4.13.2")
 }

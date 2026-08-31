@@ -46,6 +46,9 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Run parser regression tests
+        run: gradle :Oni:testDebugUnitTest --stacktrace
+
       - name: Remove stale published binary
         run: rm -f Anizium.cs3
 
