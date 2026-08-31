@@ -2,7 +2,7 @@ name: Build Oni Anizium plugin
 
 on:
   push:
-    branches: [main, v37-reliability]
+    branches: [main]
     paths:
       - 'Oni/**'
       - 'build.gradle.kts'
@@ -102,7 +102,6 @@ jobs:
           JSON
 
       - name: Publish fresh plugin files
-        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
